@@ -12,6 +12,9 @@
     <meta name="apple-mobile-web-app-title" content="Taller">
     <meta name="mobile-web-app-capable" content="yes">
     
+    <!-- Enlace al Manifest de la PWA -->
+    <link rel="manifest" href="manifest.json">
+    
     <!-- Icono SVG integrado -->
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%23dc2626%22></rect><text x=%2250%22 y=%2268%22 font-size=%2250%22 text-anchor=%22middle%22 fill=%22white%22>🛠️</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%23dc2626%22></rect><text x=%2250%22 y=%2268%22 font-size=%2250%22 text-anchor=%22middle%22 fill=%22white%22>🛠️</text></svg>">
@@ -331,7 +334,6 @@
                         <button onclick="clearReportFilters()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-slate-200 text-slate-700 font-bold rounded-xl hover:bg-slate-300 transition shadow text-xs px-4"><i data-lucide="eraser" class="w-4 h-4"></i> Limpiar</button>
                         <button onclick="exportToExcel()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 transition shadow text-xs px-4"><i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Excel</button>
                         <button onclick="exportToPDF()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-sm text-xs px-4"><i data-lucide="file-text" class="w-4 h-4"></i> PDF</button>
-                        <button onclick="analyzeWithAI()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition shadow-sm text-xs px-4"><i data-lucide="sparkles" class="w-4 h-4"></i> Análisis con IA</button>
                     </div>
                 </div>
 
@@ -1877,6 +1879,15 @@
             checkUser();
             setupTagInput('companionInput', 'companionTags', 'exitCompanion', companionTagsArray);
             setupTagInput('materialInput', 'materialTags', 'exitMaterial', materialTagsArray);
+            
+            // Inicializar el Service Worker para la PWA solo en entornos soportados (http/https)
+            if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('Service Worker registrado con éxito.', reg))
+                    .catch(err => console.error('Error al registrar el Service Worker:', err));
+            } else {
+                console.log('Service Worker omitido: el entorno actual no soporta la ejecución de PWA.');
+            }
         };
     </script>
 </body>
