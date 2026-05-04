@@ -797,21 +797,38 @@
                 if (data.length > 0) {
                     if (lastKnownFirstId !== null && data[0].id !== lastKnownFirstId) {
                         if (data[0].user_id !== userProfile.id) {
-                            const cardContent = `
-                                <div class="flex items-start gap-3">
-                                    <div class="bg-red-500/20 p-2 rounded-xl text-red-400 mt-1">
-                                        <i data-lucide="bell-ring" class="w-5 h-5"></i>
+                            
+                            const title = "Baro a Ruar a Nailista";
+                            const bodyText = `Tsuper: ${data[0].name}\nPapanan: ${data[0].place}\nAramid: ${data[0].job}`;
+                            
+                            // 1. Padasen a mangipakita iti PUSH a Pakaammo no adda pammalubos ken Service Worker
+                            if ('serviceWorker' in navigator && Notification.permission === 'granted') {
+                                navigator.serviceWorker.ready.then(function(registration) {
+                                    registration.showNotification(title, {
+                                        body: bodyText,
+                                        icon: 'icon-192.png',
+                                        badge: 'icon-192.png', 
+                                        vibrate: [200, 100, 200]
+                                    });
+                                });
+                            } else {
+                                // 2. Fallback: Ipakita ti in-app a tarheta no awan pammalubos ti Push
+                                const cardContent = `
+                                    <div class="flex items-start gap-3">
+                                        <div class="bg-red-500/20 p-2 rounded-xl text-red-400 mt-1">
+                                            <i data-lucide="bell-ring" class="w-5 h-5"></i>
+                                        </div>
+                                        <div class="flex flex-col text-left">
+                                            <span class="text-[10px] font-black text-red-400 uppercase tracking-widest">Baro a Ruar a Nailista</span>
+                                            <span class="text-sm font-bold text-white mt-0.5"><i data-lucide="user" class="w-3 h-3 inline"></i> Tsuper: ${data[0].name}</span>
+                                            <span class="text-[10px] text-slate-300 mt-1 flex items-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i> Papanan: ${data[0].place}</span>
+                                            <span class="text-[10px] text-slate-300 mt-0.5 flex items-center gap-1"><i data-lucide="briefcase" class="w-3 h-3"></i> Aramid: ${data[0].job}</span>
+                                        </div>
                                     </div>
-                                    <div class="flex flex-col text-left">
-                                        <span class="text-[10px] font-black text-red-400 uppercase tracking-widest">Nueva Salida Registrada</span>
-                                        <span class="text-sm font-bold text-white mt-0.5"><i data-lucide="user" class="w-3 h-3 inline"></i> Chofer: ${data[0].name}</span>
-                                        <span class="text-[10px] text-slate-300 mt-1 flex items-center gap-1"><i data-lucide="map-pin" class="w-3 h-3"></i> Destino: ${data[0].place}</span>
-                                        <span class="text-[10px] text-slate-300 mt-0.5 flex items-center gap-1"><i data-lucide="briefcase" class="w-3 h-3"></i> Labor: ${data[0].job}</span>
-                                    </div>
-                                </div>
-                            `;
-                            showToast(cardContent, false); 
-                            setTimeout(() => lucide.createIcons(), 10);
+                                `;
+                                showToast(cardContent, false); 
+                                setTimeout(() => lucide.createIcons(), 10);
+                            }
                         }
                     }
                     lastKnownFirstId = data[0].id;
