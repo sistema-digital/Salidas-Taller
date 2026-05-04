@@ -2,8 +2,6 @@ const CACHE_NAME = 'taller-pwa-v1';
 const urlsToCache = [
   './index.html',
   './manifest.json'
-  // Nota: Las librerías de CDN como Tailwind o Supabase no las cacheamos aquí 
-  // para evitar problemas de cuota o actualizaciones obsoletas.
 ];
 
 // Instalación del Service Worker y guardado en Caché
@@ -11,7 +9,6 @@ self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => {
-        console.log('Archivos en caché guardados');
         return cache.addAll(urlsToCache);
       })
   );
@@ -22,7 +19,6 @@ self.addEventListener('fetch', event => {
   event.respondWith(
     caches.match(event.request)
       .then(response => {
-        // Devuelve el archivo desde caché si existe
         if (response) {
           return response;
         }
@@ -31,7 +27,7 @@ self.addEventListener('fetch', event => {
   );
 });
 
-// Limpieza de cachés antiguas si actualizamos la versión de la app
+// Limpieza de cachés antiguas
 self.addEventListener('activate', event => {
   const cacheWhitelist = [CACHE_NAME];
   event.waitUntil(
@@ -43,6 +39,26 @@ self.addEventListener('activate', event => {
           }
         })
       );
+    })
+  );
+});
+
+// --- NUEVO: Manejo de clics en las notificaciones Push ---
+self.addEventListener('notificationclick', event => {
+  event.notification.close(); // Cierra la notificación
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
+      // Si la app ya está abierta en alguna pestaña, la trae al frente (focus)
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url.indexOf('/') !== -1 && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // Si la app está cerrada, abre una nueva ventana principal
+      if (clients.openWindow) {
+        return clients.openWindow('./index.html');
+      }
     })
   );
 });
