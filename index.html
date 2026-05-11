@@ -334,7 +334,6 @@
                         <button onclick="clearReportFilters()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-slate-200 text-slate-700 font-bold rounded-xl hover:bg-slate-300 transition shadow text-xs px-4"><i data-lucide="eraser" class="w-4 h-4"></i> Limpiar</button>
                         <button onclick="exportToExcel()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-green-600 text-white font-bold rounded-xl hover:bg-green-700 transition shadow text-xs px-4"><i data-lucide="file-spreadsheet" class="w-4 h-4"></i> Excel</button>
                         <button onclick="exportToPDF()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition shadow-sm text-xs px-4"><i data-lucide="file-text" class="w-4 h-4"></i> PDF</button>
-                        <button onclick="analyzeWithAI()" class="flex-1 md:flex-none flex items-center justify-center gap-1.5 p-2 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 transition shadow-sm text-xs px-4"><i data-lucide="sparkles" class="w-4 h-4"></i> Análisis con IA</button>
                     </div>
                 </div>
 
@@ -658,6 +657,14 @@
         let pollingTimer = null;
         let confirmAction = null; 
 
+        // Variables globales para autocompletado en línea
+        let namesArray = [];
+        let placesArray = [];
+        let equipmentsArray = [];
+        let jobsArray = [];
+        let allCompanionsArray = [];
+        let allMaterialsArray = [];
+
         let chartInstanceStatus = null;
         let chartInstanceActivity = null;
         let chartInstanceLocation = null;
@@ -667,6 +674,59 @@
 
         // Utils
         function setLoading(s) { document.getElementById('globalLoader').classList.toggle('hidden', !s); }
+        
+        function setupInlineAutocomplete(inputId, getListFn) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            // NUEVO: Ocultar lista completa al hacer clic vacío y prevenir historial del navegador
+            input.setAttribute('autocomplete', 'off');
+            const listId = input.getAttribute('list');
+            
+            if (listId) {
+                input.removeAttribute('list'); // Ocultar por defecto
+                
+                const toggleDatalist = () => {
+                    if (input.value.trim().length > 0) {
+                        input.setAttribute('list', listId); // Mostrar referencias solo al escribir
+                    } else {
+                        input.removeAttribute('list'); // Quitar lista si está vacío
+                    }
+                };
+                
+                input.addEventListener('input', toggleDatalist);
+                input.addEventListener('focus', toggleDatalist);
+                input.addEventListener('click', toggleDatalist);
+            }
+
+            input.addEventListener('input', function(e) {
+                // No autocompletar si se está borrando texto
+                if (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') return;
+                
+                const val = this.value;
+                if (!val) return;
+                
+                const list = getListFn();
+                const match = list.find(item => item.toUpperCase().startsWith(val.toUpperCase()));
+                
+                if (match) {
+                    const originalLength = val.length;
+                    // Autocompleta el resto y lo selecciona
+                    this.value = val + match.substring(originalLength).toUpperCase();
+                    this.setSelectionRange(originalLength, this.value.length);
+                }
+            });
+
+            input.addEventListener('keydown', function(e) {
+                // Aceptar la sugerencia con TAB sin saltar al siguiente campo
+                if (e.key === 'Tab') {
+                    if (this.selectionStart !== this.selectionEnd && this.selectionEnd === this.value.length) {
+                        e.preventDefault();
+                        this.setSelectionRange(this.value.length, this.value.length);
+                    }
+                }
+            });
+        }
         
         function showToast(m, e=false) {
             const t = document.getElementById('toast'); 
@@ -893,24 +953,29 @@
                 }
             };
 
-            const names = unique('name');
-            const jobs = unique('job');
+            namesArray = unique('name');
+            jobsArray = unique('job');
+            placesArray = unique('place');
+            equipmentsArray = unique('equipment');
             
-            fill('namesList', names);
-            fill('placesList', unique('place'));
-            fill('equipmentsList', unique('equipment'));
-            fill('jobsList', jobs);
+            fill('namesList', namesArray);
+            fill('placesList', placesArray);
+            fill('equipmentsList', equipmentsArray);
+            fill('jobsList', jobsArray);
             
-            fillSelect('repOperator', names);
-            fillSelect('repActivity', jobs);
+            fillSelect('repOperator', namesArray);
+            fillSelect('repActivity', jobsArray);
 
             const extractList = (key) => {
                 let all = [];
                 exitsData.forEach(e => { if(e[key]) all.push(...e[key].split(',').map(s => s.trim())); });
                 return [...new Set(all)];
             };
-            fill('companionsList', extractList('companion'));
-            fill('materialsList', extractList('material'));
+            
+            allCompanionsArray = extractList('companion');
+            allMaterialsArray = extractList('material');
+            fill('companionsList', allCompanionsArray);
+            fill('materialsList', allMaterialsArray);
         }
 
         // Form Resets
@@ -1934,6 +1999,14 @@
             setupTagInput('companionInput', 'companionTags', 'exitCompanion', companionTagsArray);
             setupTagInput('materialInput', 'materialTags', 'exitMaterial', materialTagsArray);
             
+            // Inicializar autocompletado en línea
+            setupInlineAutocomplete('exitName', () => namesArray);
+            setupInlineAutocomplete('exitPlace', () => placesArray);
+            setupInlineAutocomplete('exitEquipment', () => equipmentsArray);
+            setupInlineAutocomplete('exitJob', () => jobsArray);
+            setupInlineAutocomplete('companionInput', () => allCompanionsArray);
+            setupInlineAutocomplete('materialInput', () => allMaterialsArray);
+
             if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
                 navigator.serviceWorker.register('./sw.js')
                     .then(reg => console.log('Service Worker registrado con éxito.', reg))
