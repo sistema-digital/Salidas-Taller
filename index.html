@@ -1298,7 +1298,7 @@
             const body = document.getElementById('calendarBody');
             if(!body) return;
             const rangeDisplay = document.getElementById('currentWeekRange');
-            const isAdmin = userProfile && (userProfile.role === 'admin' || userProfile.is_admin);
+            const isAdmin = userProfile && (userProfile.role === 'admin' || userProfile.is_admin || userProfile.role === 'supervisor');
             body.innerHTML = '';
 
             if (activeSearchTerm) {
