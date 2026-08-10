@@ -97,6 +97,31 @@
             page-break-inside: avoid !important;
             break-inside: avoid !important;
         }
+    
+        /* Ajuste mínimo para visualización horizontal en celulares */
+        @media (max-width: 932px) and (orientation: landscape) {
+            html, body {
+                width: 100%;
+                overflow-x: hidden;
+            }
+
+            main {
+                width: 100%;
+                max-width: 100%;
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+            }
+
+            header > div {
+                width: 100%;
+                max-width: 100%;
+            }
+
+            .overflow-x-auto {
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
     </style>
 </head>
 <body class="min-h-screen text-slate-800 pb-20 md:pb-0">
