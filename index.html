@@ -645,7 +645,7 @@
     <script>
         const SB_URL = "https://xzwsefliqfflqjxbrvij.supabase.co";
         const SB_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh6d3NlZmxpcWZmbHFqeGJydmlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYyNzY4MzcsImV4cCI6MjA5MTg1MjgzN30.lJZDMgRqjdPfRiDW8wAe0VLqXCJ94x4Asf33dNVnaMM";
-        const supabaseClient = window.supabase.createClient(SB_URL, SB_KEY);
+        const supabaseClient = window.supabase?.createClient ? window.supabase.createClient(SB_URL, SB_KEY) : null;
         const apiKey = ""; // API key para Gemini
         
         // State Variables
@@ -662,6 +662,8 @@
         let activeSearchTerm = "";
         let searchTimeout = null; 
         let pollingTimer = null;
+        let pollingInProgress = false;
+        let loaderSafetyTimer = null;
         let confirmAction = null; 
         let loadedHistoryDays = 3; 
 
@@ -681,7 +683,49 @@
         const loader = document.getElementById('globalLoader');
 
         // Utils
-        function setLoading(s) { document.getElementById('globalLoader').classList.toggle('hidden', !s); }
+        function setLoading(s) {
+            const globalLoader = document.getElementById('globalLoader');
+            if (!globalLoader) return;
+
+            globalLoader.classList.toggle('hidden', !s);
+
+            if (loaderSafetyTimer) {
+                clearTimeout(loaderSafetyTimer);
+                loaderSafetyTimer = null;
+            }
+
+            // Red de seguridad: ninguna operación puede dejar el loader visible indefinidamente.
+            if (s) {
+                loaderSafetyTimer = setTimeout(() => {
+                    globalLoader.classList.add('hidden');
+                    loaderSafetyTimer = null;
+                    console.warn('[Loader] Se liberó automáticamente por tiempo de espera.');
+                    showToast('La operación está tardando demasiado. Puedes intentar nuevamente.', true);
+                }, 30000);
+            }
+        }
+
+        const APP_REQUEST_TIMEOUT_MS = 12000;
+
+        function safeCreateIcons() {
+            try {
+                if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                    window.lucide.createIcons();
+                }
+            } catch (err) {
+                console.warn('[UI] No se pudieron actualizar los iconos:', err);
+            }
+        }
+
+        function withTimeout(promise, ms = APP_REQUEST_TIMEOUT_MS, label = 'La conexión') {
+            let timer;
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label} tardó demasiado. Verifica tu conexión e inténtalo nuevamente.`)), ms);
+            });
+
+            return Promise.race([Promise.resolve(promise), timeout])
+                .finally(() => clearTimeout(timer));
+        }
         
         function setupInlineAutocomplete(inputId, getListFn) {
             const input = document.getElementById(inputId);
@@ -750,7 +794,7 @@
             document.getElementById('confirmMessage').textContent = message;
             confirmAction = action;
             document.getElementById('confirmModal').classList.replace('hidden', 'flex');
-            lucide.createIcons();
+            safeCreateIcons();
         }
         
         function closeConfirmModal() {
@@ -767,7 +811,7 @@
             document.getElementById('alertTitle').textContent = title;
             document.getElementById('alertMessage').textContent = message;
             document.getElementById('alertModal').classList.replace('hidden', 'flex');
-            lucide.createIcons();
+            safeCreateIcons();
         }
         
         function closeAlertModal() {
@@ -784,23 +828,86 @@
                 input.type = "password";
                 icon.setAttribute("data-lucide", "eye");
             }
-            lucide.createIcons();
+            safeCreateIcons();
         };
 
         // Auth & Init
         async function checkUser() {
-            const { data: { user } } = await supabaseClient.auth.getUser();
-            if (user) {
-                let { data: profile } = await supabaseClient.from('profiles').select('*').eq('id', user.id).maybeSingle();
-                if (!profile) {
-                    profile = { id: user.id, name: user.email.split('@')[0], email: user.email, role: 'admin', is_admin: true };
-                    await supabaseClient.from('profiles').upsert([profile]);
+            setLoading(true);
+
+            try {
+                if (!supabaseClient) {
+                    throw new Error('No se pudo cargar el servicio de conexión. Revisa tu internet y recarga la aplicación.');
                 }
+
+                const authResult = await withTimeout(
+                    supabaseClient.auth.getUser(),
+                    APP_REQUEST_TIMEOUT_MS,
+                    'La autenticación'
+                );
+
+                if (authResult?.error) throw authResult.error;
+
+                const user = authResult?.data?.user;
+
+                if (!user) {
+                    document.getElementById('mainDashboard').classList.add('hidden');
+                    document.getElementById('loginScreen').classList.remove('hidden');
+                    return false;
+                }
+
+                const profileResult = await withTimeout(
+                    supabaseClient.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+                    APP_REQUEST_TIMEOUT_MS,
+                    'La carga del perfil'
+                );
+
+                if (profileResult?.error) throw profileResult.error;
+
+                let profile = profileResult?.data;
+
+                if (!profile) {
+                    profile = {
+                        id: user.id,
+                        name: user.email.split('@')[0],
+                        email: user.email,
+                        role: 'admin',
+                        is_admin: true
+                    };
+
+                    try {
+                        const upsertResult = await withTimeout(
+                            supabaseClient.from('profiles').upsert([profile]),
+                            APP_REQUEST_TIMEOUT_MS,
+                            'La creación del perfil'
+                        );
+                        if (upsertResult?.error) console.warn('[Auth] No se pudo guardar el perfil:', upsertResult.error);
+                    } catch (profileSaveError) {
+                        // El perfil local permite entrar aunque falle temporalmente la escritura.
+                        console.warn('[Auth] Perfil temporal usado por problema de red:', profileSaveError);
+                    }
+                }
+
                 userProfile = profile;
-                initDashboard();
+
+                // Esperar realmente a que el panel termine de inicializarse.
+                await initDashboard();
+
+                // Los procesos secundarios solo empiezan después de una inicialización correcta.
                 startPolling();
-                setupPushSubscription(); // Llamamos a la función de suscripción
-            } else { setLoading(false); }
+                setupPushSubscription().catch(err => console.warn('[Push] Error no crítico:', err));
+                return true;
+
+            } catch (err) {
+                console.error('[Inicio] Error al iniciar la aplicación:', err);
+                document.getElementById('mainDashboard').classList.add('hidden');
+                document.getElementById('loginScreen').classList.remove('hidden');
+                showToast(err?.message || 'No se pudo iniciar la aplicación. Inténtalo nuevamente.', true);
+                return false;
+            } finally {
+                // Garantía: el loader nunca queda bloqueado indefinidamente.
+                setLoading(false);
+            }
         }
 
         // --- LÓGICA PUSH MANAGER ---
@@ -848,61 +955,83 @@
         // ---------------------------------
 
         function startPolling() {
-            if(pollingTimer) clearInterval(pollingTimer);
+            if (pollingTimer) clearInterval(pollingTimer);
+
             pollingTimer = setInterval(async () => {
-                // Si el usuario está buscando algo, pausamos la sincronización de fondo para no entorpecer
-                if (activeSearchTerm) return;
+                // Evitar consultas superpuestas y pausar mientras el usuario busca.
+                if (activeSearchTerm || pollingInProgress || !supabaseClient || !userProfile) return;
 
-                const todayStr = new Date().toISOString().split('T')[0];
-                
-                // Validación diferencial ultraligera: Solo pedimos IDs, estado y firma (datos susceptibles a cambio rápido)
-                const { data: currentLightData, error } = await supabaseClient
-                    .from('exits')
-                    .select('id, status, signed_by')
-                    .eq('date_str', todayStr);
+                pollingInProgress = true;
 
-                if (!error && currentLightData) {
-                    const idsToFetch = [];
-                    
-                    currentLightData.forEach(remote => {
-                        const local = exitsData.find(e => e.id === remote.id);
-                        // Comprobamos si es un registro NUEVO o si un supervisor le CAMBIÓ EL ESTADO
-                        if (!local || local.status !== remote.status || local.signed_by !== remote.signed_by) {
-                            idsToFetch.push(remote.id);
+                try {
+                    const todayStr = new Date().toISOString().split('T')[0];
+
+                    const result = await withTimeout(
+                        supabaseClient
+                            .from('exits')
+                            .select('id, status, signed_by')
+                            .eq('date_str', todayStr),
+                        10000,
+                        'La sincronización automática'
+                    );
+
+                    const { data: currentLightData, error } = result || {};
+                    if (error) throw error;
+
+                    if (currentLightData) {
+                        const idsToFetch = [];
+
+                        currentLightData.forEach(remote => {
+                            const local = exitsData.find(e => e.id === remote.id);
+                            if (!local || local.status !== remote.status || local.signed_by !== remote.signed_by) {
+                                idsToFetch.push(remote.id);
+                            }
+                        });
+
+                        const currentIds = currentLightData.map(d => d.id);
+                        const localTodayExits = exitsData.filter(e => e.date_str === todayStr);
+                        const deletedIds = localTodayExits
+                            .filter(local => !currentIds.includes(local.id))
+                            .map(e => e.id);
+
+                        if (deletedIds.length > 0) {
+                            console.log(`[Sync] Registros eliminados detectados: ${deletedIds.length}`);
+                            exitsData = exitsData.filter(e => !deletedIds.includes(e.id));
+                            updateDatalists();
+                            if (!document.getElementById('page_calendarView').classList.contains('hidden')) renderCalendar();
+                            if (!document.getElementById('page_approvals').classList.contains('hidden')) renderApprovals();
                         }
-                    });
 
-                    // También verificamos inteligentemente si algún registro fue eliminado desde la nube
-                    const currentIds = currentLightData.map(d => d.id);
-                    const localTodayExits = exitsData.filter(e => e.date_str === todayStr);
-                    const deletedIds = localTodayExits.filter(local => !currentIds.includes(local.id)).map(e => e.id);
-
-                    // Purgamos de la memoria los eliminados sin gastar internet extra
-                    if (deletedIds.length > 0) {
-                        console.log(`[Sync] Registros eliminados detectados: ${deletedIds.length}`);
-                        exitsData = exitsData.filter(e => !deletedIds.includes(e.id));
-                        updateDatalists();
-                        if (!document.getElementById('page_calendarView').classList.contains('hidden')) renderCalendar();
-                        if (!document.getElementById('page_approvals').classList.contains('hidden')) renderApprovals();
+                        if (idsToFetch.length > 0) {
+                            console.log(`[Sync] Cambios detectados. Descargando SOLO la información de ${idsToFetch.length} registros...`);
+                            await syncSpecificData(idsToFetch);
+                        }
                     }
 
-                    // SÓLO descargamos el peso completo de los registros que cambiaron o son nuevos
-                    if (idsToFetch.length > 0) {
-                        console.log(`[Sync] Cambios detectados. Descargando SOLO la información de ${idsToFetch.length} registros...`);
-                        await syncSpecificData(idsToFetch);
+                    if (!document.getElementById('page_adminUsers').classList.contains('hidden')) {
+                        // No permitir que una consulta de usuarios bloquee indefinidamente el ciclo.
+                        await withTimeout(renderUsers(), 10000, 'La actualización de usuarios');
                     }
+                } catch (err) {
+                    // Error silencioso: la app sigue funcionando y reintentará en el próximo ciclo.
+                    console.warn('[Sync] Sincronización omitida temporalmente:', err);
+                } finally {
+                    pollingInProgress = false;
                 }
-
-                if(!document.getElementById('page_adminUsers').classList.contains('hidden')) renderUsers();
             }, 10000);
         }
 
         // NUEVA FUNCIÓN: Descarga exclusivamente los registros cambiados y los inyecta en el caché
         async function syncSpecificData(changedIds) {
-            const { data, error } = await supabaseClient
-                .from('exits')
-                .select('*')
-                .in('id', changedIds);
+            const result = await withTimeout(
+                supabaseClient
+                    .from('exits')
+                    .select('*')
+                    .in('id', changedIds),
+                10000,
+                'La descarga de cambios'
+            );
+            const { data, error } = result || {};
 
             if (!error && data) {
                 // Identificamos cuáles de estos son completamente nuevos para lanzar la alerta
@@ -938,7 +1067,7 @@
                                 </div>
                             `;
                             showToast(cardContent, false); 
-                            setTimeout(() => lucide.createIcons(), 10);
+                            setTimeout(() => safeCreateIcons(), 10);
                         }
                     }
                 }
@@ -983,7 +1112,10 @@
                 Notification.requestPermission();
             }
 
-            await fetchExits();
+            const initialDataLoaded = await fetchExits(true);
+            if (!initialDataLoaded) {
+                showToast('La aplicación inició, pero no se pudieron sincronizar los datos. Se reintentará automáticamente.', true);
+            }
             currentDateAnchor = new Date();
             
             if (isUser) {
@@ -994,8 +1126,7 @@
                 showPage('registerExit');
             }
             
-            setLoading(false);
-            lucide.createIcons();
+            safeCreateIcons();
         }
         
         async function handleLogout() { 
@@ -1008,55 +1139,69 @@
 
         // Data Fetching
         async function fetchExits(isSilent = false) {
-            if(!isSilent) setLoading(true);
+            if (!isSilent) setLoading(true);
 
-            let data, error;
-            const timeAgo = new Date();
-            timeAgo.setDate(timeAgo.getDate() - loadedHistoryDays);
-            const dateLimit = timeAgo.toISOString().split('T')[0];
+            try {
+                if (!supabaseClient) throw new Error('Servicio de datos no disponible.');
 
-            // NUEVA REGLA: Supabase hace TODO el filtrado por nombre y deduplicación
-            if (activeSearchTerm) {
-                const res = await supabaseClient.rpc('get_unique_searched_exits', { 
-                    search_text: activeSearchTerm, 
-                    days_limit: loadedHistoryDays 
-                });
-                
-                if (!res.error && res.data) {
-                    data = res.data;
+                let data, error;
+                const timeAgo = new Date();
+                timeAgo.setDate(timeAgo.getDate() - loadedHistoryDays);
+                const dateLimit = timeAgo.toISOString().split('T')[0];
+
+                if (activeSearchTerm) {
+                    let res;
+                    try {
+                        res = await withTimeout(
+                            supabaseClient.rpc('get_unique_searched_exits', {
+                                search_text: activeSearchTerm,
+                                days_limit: loadedHistoryDays
+                            }),
+                            APP_REQUEST_TIMEOUT_MS,
+                            'La búsqueda'
+                        );
+                    } catch (rpcError) {
+                        console.warn('[Datos] RPC no disponible, usando búsqueda alternativa:', rpcError);
+                        res = { error: rpcError, data: null };
+                    }
+
+                    if (!res?.error && res?.data) {
+                        data = res.data;
+                    } else {
+                        const fallbackRes = await withTimeout(
+                            supabaseClient
+                                .from('exits')
+                                .select('*')
+                                .gte('date_str', dateLimit)
+                                .ilike('name', `%${activeSearchTerm}%`)
+                                .order('created_at', { ascending: false }),
+                            APP_REQUEST_TIMEOUT_MS,
+                            'La búsqueda alternativa'
+                        );
+                        data = fallbackRes?.data;
+                        error = fallbackRes?.error;
+                    }
                 } else {
-                    // Fallback solo por nombre
-                    const fallbackRes = await supabaseClient
-                        .from('exits')
-                        .select('*')
-                        .gte('date_str', dateLimit)
-                        .ilike('name', `%${activeSearchTerm}%`)
-                        .order('created_at', { ascending: false });
-                    data = fallbackRes.data;
-                    error = fallbackRes.error;
+                    const res = await withTimeout(
+                        supabaseClient
+                            .from('exits')
+                            .select('*')
+                            .gte('date_str', dateLimit)
+                            .order('created_at', { ascending: false }),
+                        APP_REQUEST_TIMEOUT_MS,
+                        'La carga de salidas'
+                    );
+                    data = res?.data;
+                    error = res?.error;
                 }
-            } else {
-                // Comportamiento normal del calendario
-                const res = await supabaseClient
-                    .from('exits')
-                    .select('*')
-                    .gte('date_str', dateLimit)
-                    .order('created_at', { ascending: false });
-                data = res.data;
-                error = res.error;
-            }
 
-            if (!error) {
-                
-                let processedData = data || [];
+                if (error) throw error;
 
-                // Ya NO filtramos localmente. Cumplimos la regla: Supabase nos manda la lista limpia.
+                const processedData = data || [];
 
-                // Solo lanzamos alertas y actualizamos ID maestro si NO estamos en una búsqueda pasada
                 if (processedData.length > 0 && !activeSearchTerm) {
                     if (lastKnownFirstId !== null && processedData[0].id !== lastKnownFirstId) {
                         if (processedData[0].user_id !== userProfile.id) {
-                            
                             const cardContent = `
                                 <div class="flex items-start gap-3">
                                     <div class="bg-red-500/20 p-2 rounded-xl text-red-400 mt-1">
@@ -1070,21 +1215,28 @@
                                     </div>
                                 </div>
                             `;
-                            showToast(cardContent, false); 
-                            setTimeout(() => lucide.createIcons(), 10);
+                            showToast(cardContent, false);
+                            setTimeout(() => safeCreateIcons(), 10);
                         }
                     }
                     lastKnownFirstId = processedData[0].id;
                 }
 
                 exitsData = processedData;
-
                 updateDatalists();
                 if (!document.getElementById('page_calendarView').classList.contains('hidden')) renderCalendar();
                 if (!document.getElementById('page_approvals').classList.contains('hidden')) renderApprovals();
-                // Eliminamos la carga automática de reportes aquí
+                return true;
+
+            } catch (err) {
+                console.error('[Datos] Error al cargar salidas:', err);
+                if (!isSilent) {
+                    showToast(err?.message || 'No se pudieron cargar los datos. Inténtalo nuevamente.', true);
+                }
+                return false;
+            } finally {
+                if (!isSilent) setLoading(false);
             }
-            if(!isSilent) setLoading(false);
         }
         
         function updateDatalists() {
@@ -1138,7 +1290,7 @@
             document.getElementById('btnSubmitText').textContent = "Guardar Salida";
             document.getElementById('btnCancelEdit').innerHTML = '<i data-lucide="x-circle" class="w-4 h-4"></i> Cancelar';
             document.getElementById('btnCancelEdit').classList.add('hidden');
-            lucide.createIcons();
+            safeCreateIcons();
         }
 
         // Navigation
@@ -1259,7 +1411,7 @@
             document.getElementById('btnSubmitText').textContent = "Actualizar Registro";
             document.getElementById('btnCancelEdit').innerHTML = '<i data-lucide="x-circle" class="w-4 h-4"></i> Cancelar Edición';
             document.getElementById('btnCancelEdit').classList.remove('hidden');
-            lucide.createIcons();
+            safeCreateIcons();
             
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -1285,7 +1437,7 @@
             document.getElementById('btnSubmitText').textContent = "Guardar Copia";
             document.getElementById('btnCancelEdit').innerHTML = '<i data-lucide="x-circle" class="w-4 h-4"></i> Cancelar Copiado';
             document.getElementById('btnCancelEdit').classList.remove('hidden');
-            lucide.createIcons();
+            safeCreateIcons();
             
             showToast("Datos copiados al formulario");
             window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1394,7 +1546,7 @@
                     </div>
                 </div>`;
             document.getElementById('detailsModal').classList.replace('hidden', 'flex'); 
-            lucide.createIcons();
+            safeCreateIcons();
         }
         window.showExitDetails = showExitDetails;
         
@@ -1533,7 +1685,7 @@
 
                     body.innerHTML = html;
                 }
-                lucide.createIcons();
+                safeCreateIcons();
                 return;
             }
 
@@ -1583,7 +1735,7 @@
                 `;
                 body.appendChild(col); curr.setDate(curr.getDate() + 1);
             }
-            lucide.createIcons();
+            safeCreateIcons();
         }
         window.renderCalendar = renderCalendar;
 
@@ -1656,7 +1808,7 @@
                     </div>
                 </div>
             `).join('');
-            lucide.createIcons();
+            safeCreateIcons();
         }
 
         // Reports
@@ -1959,7 +2111,7 @@
                     <div class="tag">${t} <button type="button" onclick="removeTagGlobal('${containerId}', ${i})"><i data-lucide="x" class="w-3 h-3"></i></button></div>
                 `).join('');
                 hidden.value = listRef.join(', ');
-                lucide.createIcons();
+                safeCreateIcons();
             };
             const addCurrentValue = () => {
                 let val = input.value.trim().replace(/,/g, '');
@@ -1990,19 +2142,37 @@
                 const c = r === 'admin' ? 'bg-red-100 text-red-700' : r === 'supervisor' ? 'bg-slate-200 text-slate-700' : 'bg-slate-100 text-slate-600';
                 return `<tr class="hover:bg-slate-50 transition-colors"><td class="px-5 py-3 font-bold text-slate-800 text-xs uppercase">${p.name || 'S/N'}</td><td class="px-5 py-3 text-slate-500 text-[10px]">${p.email}</td><td class="px-5 py-3 text-right"><span class="px-2 py-1 rounded-md text-[9px] font-black uppercase ${c}">${r}</span></td></tr>`;
             }).join('');
-            lucide.createIcons();
+            safeCreateIcons();
         }
 
         // Event Listeners (Login & User Forms)
         const loginForm = document.getElementById('loginForm');
         if(loginForm) {
             loginForm.addEventListener('submit', async (e) => {
-                e.preventDefault(); setLoading(true);
+                e.preventDefault();
+                setLoading(true);
 
-                const email = document.getElementById('loginEmail').value;
-                const password = document.getElementById('loginPass').value;
-                const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-                if (error) { showToast("Error: " + error.message, true); setLoading(false); } else { await checkUser(); }
+                try {
+                    if (!supabaseClient) throw new Error('No se pudo cargar el servicio de conexión. Recarga la aplicación.');
+
+                    const email = document.getElementById('loginEmail').value;
+                    const password = document.getElementById('loginPass').value;
+
+                    const result = await withTimeout(
+                        supabaseClient.auth.signInWithPassword({ email, password }),
+                        APP_REQUEST_TIMEOUT_MS,
+                        'El inicio de sesión'
+                    );
+
+                    if (result?.error) throw result.error;
+                    await checkUser();
+
+                } catch (err) {
+                    console.error('[Login] Error:', err);
+                    showToast('Error: ' + (err?.message || 'No se pudo iniciar sesión.'), true);
+                } finally {
+                    setLoading(false);
+                }
             });
         }
 
@@ -2052,27 +2222,33 @@
             });
         }
 
-        window.onload = () => {
-            checkUser();
-            setupTagInput('companionInput', 'companionTags', 'exitCompanion', companionTagsArray);
-            setupTagInput('materialInput', 'materialTags', 'exitMaterial', materialTagsArray);
-            
-            // Inicializar autocompletado en línea
-            setupInlineAutocomplete('exitName', () => namesArray);
-            setupInlineAutocomplete('exitPlace', () => placesArray);
-            setupInlineAutocomplete('exitEquipment', () => equipmentsArray);
-            setupInlineAutocomplete('exitJob', () => jobsArray);
-            setupInlineAutocomplete('companionInput', () => allCompanionsArray);
-            setupInlineAutocomplete('materialInput', () => allMaterialsArray);
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                setupTagInput('companionInput', 'companionTags', 'exitCompanion', companionTagsArray);
+                setupTagInput('materialInput', 'materialTags', 'exitMaterial', materialTagsArray);
 
-            if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
-                navigator.serviceWorker.register('./sw.js')
-                    .then(reg => console.log('Service Worker registrado con éxito.', reg))
-                    .catch(err => console.error('Error al registrar el Service Worker:', err));
-            } else {
-                console.log('Service Worker omitido: el entorno actual no soporta la ejecución de PWA.');
+                setupInlineAutocomplete('exitName', () => namesArray);
+                setupInlineAutocomplete('exitPlace', () => placesArray);
+                setupInlineAutocomplete('exitEquipment', () => equipmentsArray);
+                setupInlineAutocomplete('exitJob', () => jobsArray);
+                setupInlineAutocomplete('companionInput', () => allCompanionsArray);
+                setupInlineAutocomplete('materialInput', () => allMaterialsArray);
+
+                // Registrar la PWA en segundo plano; nunca debe bloquear el inicio.
+                if ('serviceWorker' in navigator && (window.location.protocol === 'https:' || window.location.protocol === 'http:')) {
+                    navigator.serviceWorker.register('./sw.js?v=20260831-stable1')
+                        .then(reg => console.log('Service Worker registrado con éxito.', reg))
+                        .catch(err => console.warn('Service Worker no disponible:', err));
+                }
+
+                await checkUser();
+                safeCreateIcons();
+            } catch (err) {
+                console.error('[Inicio UI] Error inesperado:', err);
+                setLoading(false);
+                showToast('La aplicación encontró un problema al iniciar. Recarga la página.', true);
             }
-        };
+        });
     </script>
 </body>
 </html>
